@@ -33,9 +33,128 @@
     { id: 'phish-sms', area: 'security', ready: true, title: '詐騙簡訊判斷', desc: '從網址與語氣找出詐騙簡訊的破綻。' }
   ];
 
-  // 各單元最後的教學內容。之後在這裡填入 HTML，例如：
-  // TUTORIALS.binary = '<p>二進位只有 0 和 1……</p>';
-  const TUTORIALS = {};
+  // 各單元的教學內容（會顯示在遊戲上方的「先看重點」，可展開收合）
+  const BIN_REF = `
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>十進位</th><th>二進位</th><th>怎麼算</th></tr></thead>
+      <tbody>${Array.from({ length: 15 }, (_, k) => {
+        const n = k + 1;
+        const parts = [8, 4, 2, 1].filter((p) => n & p);
+        return `<tr><td>${n}</td><td class="big-n">${n.toString(2).padStart(4, '0')}</td><td>${parts.join(' + ')}</td></tr>`;
+      }).join('')}</tbody>
+    </table></div>`;
+
+  const TUTORIALS = {
+    binary: `
+      <p>電腦裡的電路只有兩種狀態：有電（1）和沒電（0）。所以電腦把所有東西，包含文字、照片和影片，都用 0 和 1 來記。這種只用 0 和 1 的數字寫法，叫做「二進位」。</p>
+      <h3>關鍵：每一格都是前一格的兩倍</h3>
+      <p>從最右邊開始，位值依序是 <strong>1、2、4、8、16、32……</strong>。寫 1 的格子，就把它的位值加進總和；寫 0 的格子不算。</p>
+      <p class="tip">例子：<strong>1101</strong>　→　8 + 4 + 0 + 1 = <strong>13</strong></p>
+      <h3>十進位轉二進位的小技巧</h3>
+      <ol class="flow">
+        <li>從最大的位值開始看，這個位值放得進去嗎？</li>
+        <li>放得進去就寫 1，並把數字減掉這個位值；放不進去就寫 0。</li>
+        <li>一路做到最右邊的 1 為止。</li>
+      </ol>
+      <h3>1 到 15 速查表</h3>
+      ${BIN_REF}
+      <p class="muted">先從「入門」開始，把 1 到 15 熟了，再挑戰更大的數字。</p>`,
+
+    'pc-build': `
+      <p>電腦做事的流程可以記成四個字：<strong>輸入 → 處理 → 儲存 → 輸出</strong>。</p>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>零件</th><th>好比是</th><th>關機後資料還在嗎</th></tr></thead>
+        <tbody>
+          <tr><td>CPU</td><td>大腦，負責計算</td><td>—</td></tr>
+          <tr><td>記憶體（RAM）</td><td>工作桌，放正在用的東西</td><td>消失</td></tr>
+          <tr><td>硬碟／SSD</td><td>檔案櫃，長期保存</td><td>還在</td></tr>
+        </tbody>
+      </table></div>
+      <p class="tip">為什麼不全部都用硬碟？因為記憶體比硬碟快很多。CPU 會先把要用的資料搬到記憶體，處理起來才不會卡。</p>
+      <p>主機板像一座城市的道路，所有零件都靠它連在一起；電源供應器則負責把插座的電分給每個零件。</p>`,
+
+    dns: `
+      <p>人記得住 <span class="url">www.example.com</span>，但電腦要的是 IP 位址（例如 <span class="ip">203.0.113.25</span>）。DNS 就像一本網路電話簿，負責把網址翻譯成 IP。</p>
+      <h3>查詢的順序</h3>
+      <ol class="flow">
+        <li><strong>快取</strong>：先看電腦以前有沒有查過，有就直接用。</li>
+        <li><strong>Root 伺服器</strong>：起點，告訴你網址結尾（.com、.tw…）該去哪一區問。</li>
+        <li><strong>TLD 伺服器</strong>：管理同一種結尾的網址，告訴你誰負責這個網站。</li>
+        <li><strong>權威伺服器</strong>：保管正式紀錄，直接給出 IP。</li>
+      </ol>
+      <p class="tip">查到之後會暫存起來（快取），下次就不用再跑一趟，所以第二次開同一個網站通常比較快。</p>`,
+
+    http: `
+      <p>HTTP 是瀏覽器和網站伺服器之間的「說話規則」，一來一往：瀏覽器發出<strong>請求</strong>，伺服器回傳<strong>回應</strong>。</p>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th></th><th>HTTP</th><th>HTTPS</th></tr></thead>
+        <tbody>
+          <tr><td>傳輸內容</td><td>明文，別人攔到就看得懂</td><td>加密，攔到也看不懂</td></tr>
+          <tr><td>網址開頭</td><td>http://</td><td>https://（有小鎖頭）</td></tr>
+          <tr><td>加密靠</td><td>無</td><td>SSL / TLS</td></tr>
+        </tbody>
+      </table></div>
+      <h3>常見狀態碼</h3>
+      <ul class="plain">
+        <li><strong>200</strong>：成功。</li>
+        <li><strong>404</strong>：找不到你要的頁面。</li>
+        <li><strong>500</strong>：伺服器自己出問題。</li>
+      </ul>
+      <p class="tip">小鎖頭只代表「連線有加密」，不代表網站可信。詐騙網站也能有 HTTPS。</p>`,
+
+    packet: `
+      <p>網路上的資料會被切成很多小包，叫做「封包」，分別送過去，到了再拼回來。但在開始傳資料之前，雙方要先確認彼此都連得上，這就是 TCP 的「三次握手」。</p>
+      <ol class="flow">
+        <li><strong>SYN</strong>：電腦說「喂，你在嗎？」</li>
+        <li><strong>SYN + ACK</strong>：伺服器說「我在，你聽得到我嗎？」</li>
+        <li><strong>ACK</strong>：電腦說「聽得到，開始吧。」</li>
+      </ol>
+      <p class="tip">記法：SYN 是「我想連線」，ACK 是「我收到了」。第 2 步把兩句話合在一起說。</p>`,
+
+    'phish-mail': `
+      <p>釣魚郵件想騙的是你的密碼、驗證碼或錢。看信時依序檢查這四件事：</p>
+      <ol class="flow">
+        <li><strong>寄件網域</strong>：名字像不代表是真的。看 @ 後面，有沒有多一個字、少一個字，或結尾怪怪的（.top、.cc、.vip）。</li>
+        <li><strong>語氣</strong>：「24 小時內」「帳戶將被停用」這類製造恐慌或催促的話，要提高警覺。</li>
+        <li><strong>要求</strong>：要你輸入密碼、驗證碼、卡號，幾乎一定有問題。</li>
+        <li><strong>連結</strong>：看連結實際會去哪裡，不要只看按鈕上寫的字。</li>
+      </ol>
+      <p class="tip">不確定時，不點信裡的連結，自己打開官方 App 或官網去查。</p>`,
+
+    'phish-sms': `
+      <p>詐騙簡訊的套路很固定，抓住這幾個特徵就不容易上當：</p>
+      <ol class="flow">
+        <li><strong>來源</strong>：機構通常用固定的簡訊名稱，不會用陌生的一般手機號碼或國外號碼。</li>
+        <li><strong>小金額加限時</strong>：「補繳 NT$25」「今日內繳費」，目的是讓你沒時間想。</li>
+        <li><strong>陌生短網址</strong>：結尾是 .top、.cc、.vip 的網址要特別小心。</li>
+        <li><strong>假冒親友</strong>：「我換新號碼，快幫我匯錢」，先用原本的電話確認。</li>
+      </ol>
+      <p class="tip">收到可疑簡訊：不點、不回，不確定就撥 165 問。</p>`
+  };
+
+  // 小辭典
+  const GLOSSARY = [
+    { area: 'hardware', term: 'CPU（處理器）', def: '電腦的大腦，負責計算和下指令。' },
+    { area: 'hardware', term: 'RAM（記憶體）', def: '暫時放著正在使用的資料，速度快，關機後內容消失。' },
+    { area: 'hardware', term: 'SSD（硬碟）', def: '長期保存檔案和程式，關機後資料還在。' },
+    { area: 'hardware', term: '主機板', def: '連接所有零件的大電路板。' },
+    { area: 'hardware', term: '位元（bit）', def: '電腦資料的最小單位，只有 0 或 1 兩種值。' },
+    { area: 'hardware', term: '二進位', def: '只用 0 和 1 的數字寫法，每一位的位值是前一位的兩倍。' },
+    { area: 'network', term: 'IP 位址', def: '網路上每台裝置的號碼，像家裡的門牌。' },
+    { area: 'network', term: 'DNS', def: '把網址翻譯成 IP 位址的系統，像網路電話簿。' },
+    { area: 'network', term: '網域名稱', def: '好記的網站名字，例如 example.com。' },
+    { area: 'network', term: 'TLD', def: '網址最後面的類別，例如 .com、.org、.tw。' },
+    { area: 'network', term: '快取（Cache）', def: '把查過的結果暫時存起來，下次就不用重新查。' },
+    { area: 'network', term: 'HTTP / HTTPS', def: '瀏覽器與網站溝通的規則；HTTPS 多了加密保護。' },
+    { area: 'network', term: 'SSL / TLS', def: '替網路傳輸加密的技術。' },
+    { area: 'network', term: '封包', def: '網路上傳送的小塊資料。' },
+    { area: 'network', term: 'TCP 三次握手', def: '傳資料前，雙方用 SYN、SYN+ACK、ACK 確認彼此連得上。' },
+    { area: 'network', term: '狀態碼', def: '伺服器回應時附上的數字，例如 200 成功、404 找不到。' },
+    { area: 'security', term: '釣魚（Phishing）', def: '假冒可信的單位，騙你輸入密碼或個資。' },
+    { area: 'security', term: '驗證碼（OTP）', def: '一次性的確認碼，絕對不要告訴別人。' },
+    { area: 'security', term: '人頭帳戶', def: '把自己的帳戶借給別人使用，常被詐騙集團利用，是違法行為。' },
+    { area: 'security', term: '165 專線', def: '台灣的反詐騙諮詢專線，收到可疑訊息可以打去問。' }
+  ];
 
   /* =====================================================
    * 2. 小工具
@@ -143,20 +262,44 @@
   /* =====================================================
    * 4. 頁面：首頁、區域、活動、個人檔案
    * ===================================================== */
+  function setTheme(theme) {
+    if (theme) main.dataset.theme = theme;
+    else delete main.dataset.theme;
+  }
+
   function renderHome() {
+    setTheme('');
     const played = playedIds();
+    const next = ACTIVITIES.find((a) => a.ready && !played.has(a.id));
+    const nextCard = next ? `
+      <a class="next-card" data-theme="${next.area}" href="#/activity/${next.id}">
+        <div>
+          <div class="kicker-t">推薦你接著玩</div>
+          <h2>${next.title}</h2>
+          <p>${next.desc}</p>
+        </div>
+        <span class="pill pill-go">開始</span>
+      </a>` : `
+      <div class="next-card is-done">
+        <div>
+          <div class="kicker-t" style="color:var(--good)">全部都玩過了</div>
+          <h2>太厲害了！</h2>
+          <p>挑一個領域再玩一次，把成績刷高。</p>
+        </div>
+      </div>`;
     main.innerHTML = `
       <section class="intro">
         <h1>用玩的，搞懂電腦與網路</h1>
-        <p>不需要任何基礎。挑一個主題，動手玩幾分鐘，就能看懂平常用的東西是怎麼運作的。</p>
+        <p>不需要任何基礎。每個活動都有一段「先看重點」，讀完再玩，幾分鐘就能看懂平常用的東西是怎麼運作的。</p>
       </section>
+      ${nextCard}
       <div class="area-grid">
         ${AREAS.map((area) => {
           const acts = ACTIVITIES.filter((a) => a.area === area.id);
           const done = acts.filter((a) => played.has(a.id)).length;
           const pct = Math.round((done / acts.length) * 100);
           return `
-            <a class="area-card" href="#/area/${area.id}">
+            <a class="area-card" data-theme="${area.id}" href="#/area/${area.id}">
               <span class="icon-box">${ICONS[area.icon]}</span>
               <h2>${area.title}</h2>
               <p>${area.desc}</p>
@@ -171,9 +314,11 @@
   function renderArea(areaId) {
     const area = findArea(areaId);
     const acts = ACTIVITIES.filter((a) => a.area === areaId);
+    setTheme(areaId);
     main.innerHTML = `
       <a class="back" href="#/">${ICONS.back}回到首頁</a>
       <header class="page-head">
+        <span class="kicker">${ICONS[area.icon]}${area.title}</span>
         <h1>${area.title}</h1>
         <p>${area.desc}</p>
       </header>
@@ -203,17 +348,30 @@
   function renderActivity(activityId) {
     const act = findActivity(activityId);
     const area = findArea(act.area);
+    setTheme(area.id);
+    const siblings = ACTIVITIES.filter((a) => a.area === area.id && a.ready);
+    const idx = siblings.findIndex((a) => a.id === act.id);
+    const prev = siblings[idx - 1];
+    const nextAct = siblings[idx + 1];
+    const firstTime = !playedIds().has(act.id);
     main.innerHTML = `
       <a class="back" href="#/area/${area.id}">${ICONS.back}回到${area.title}</a>
       <header class="page-head">
+        <span class="kicker">${ICONS[area.icon]}${area.title}</span>
         <h1>${act.title}</h1>
         <p>${act.desc}</p>
       </header>
+      <details class="tutorial"${firstTime ? ' open' : ''}>
+        <summary>先看重點${firstTime ? '' : '（點一下展開複習）'}</summary>
+        <div class="tutorial-body">
+          ${TUTORIALS[act.id] || '<p class="muted">教學內容準備中。</p>'}
+        </div>
+      </details>
       <section class="stage" id="stage"></section>
-      <section class="tutorial">
-        <h2>教學</h2>
-        ${TUTORIALS[act.id] || '<p class="muted">教學內容準備中，之後會放在這裡。</p>'}
-      </section>`;
+      <nav class="act-nav" aria-label="其他活動">
+        ${prev ? `<a href="#/activity/${prev.id}"><small>← 上一個</small><span>${prev.title}</span></a>` : ''}
+        ${nextAct ? `<a class="nx" href="#/activity/${nextAct.id}"><small>下一個 →</small><span>${nextAct.title}</span></a>` : ''}
+      </nav>`;
 
     const stage = $('#stage');
     if (act.ready && GAMES[act.id]) {
@@ -224,7 +382,39 @@
     return act.title;
   }
 
+  function renderGlossary() {
+    setTheme('');
+    main.innerHTML = `
+      <header class="page-head">
+        <h1>小辭典</h1>
+        <p>看到不懂的名詞，來這裡查。可以直接搜尋。</p>
+      </header>
+      <label class="sr-only" for="gloss-q">搜尋名詞</label>
+      <input id="gloss-q" class="gloss-search" type="search" placeholder="搜尋，例如 DNS、封包" autocomplete="off">
+      <div id="gloss-list"></div>`;
+
+    const list = $('#gloss-list');
+    const draw = (q) => {
+      const kw = q.trim().toLowerCase();
+      const html = AREAS.map((area) => {
+        const items = GLOSSARY.filter((g) => g.area === area.id &&
+          (!kw || g.term.toLowerCase().includes(kw) || g.def.toLowerCase().includes(kw)));
+        if (!items.length) return '';
+        return `
+          <section class="gloss-group" data-theme="${area.id}">
+            <h2><span class="icon-box">${ICONS[area.icon]}</span>${area.title}</h2>
+            <dl>${items.map((g) => `<div class="gloss-item"><dt>${esc(g.term)}</dt><dd>${esc(g.def)}</dd></div>`).join('')}</dl>
+          </section>`;
+      }).join('');
+      list.innerHTML = html || '<p class="muted">找不到符合的名詞。</p>';
+    };
+    draw('');
+    $('#gloss-q').addEventListener('input', (e) => draw(e.target.value));
+    return '小辭典';
+  }
+
   function renderProfile() {
+    setTheme('');
     const records = store.load().records;
 
     if (!records.length) {
@@ -273,9 +463,9 @@
       <header class="page-head"><h1>個人檔案</h1></header>
 
       <div class="stat-grid">
-        <div class="stat"><div class="muted">遊玩次數</div><div class="stat-n">${records.length}</div></div>
-        <div class="stat"><div class="muted">整體正確率</div><div class="stat-n">${accuracy}</div></div>
-        <div class="stat"><div class="muted">最近一次</div><div class="stat-n">${formatTime(last.ts)}</div></div>
+        <div class="stat" data-theme="hardware"><div class="muted">遊玩次數</div><div class="stat-n">${records.length}</div></div>
+        <div class="stat" data-theme="network"><div class="muted">整體正確率</div><div class="stat-n">${accuracy}</div></div>
+        <div class="stat" data-theme="security"><div class="muted">最近一次</div><div class="stat-n">${formatTime(last.ts)}</div></div>
       </div>
 
       <section class="panel">
@@ -319,18 +509,25 @@
    * ===================================================== */
   function startBinary(stage) {
     const TOTAL = 5;
-    const PLACES = [256, 128, 64, 32, 16, 8, 4, 2, 1];
+    const ALL_PLACES = [32, 16, 8, 4, 2, 1];
+    const LEVELS = {
+      easy: { label: '入門', max: 15, bits: 4, desc: '1 到 15，4 格' },
+      mid: { label: '進階', max: 31, bits: 5, desc: '1 到 31，5 格' },
+      hard: { label: '挑戰', max: 63, bits: 6, desc: '1 到 63，6 格' }
+    };
     const MODES = {
       d2b: { label: '十進位轉二進位', desc: '看到 13，輸入 1101' },
       b2d: { label: '二進位轉十進位', desc: '看到 1101，選出 13' }
     };
+    let level = 'easy';
+    let PLACES = ALL_PLACES.slice(-LEVELS[level].bits);
     let state = null;
 
     // 位值表：bits 為二進位字串，空字串代表尚未輸入
     function placeTable(bits) {
       const padded = bits ? bits.padStart(PLACES.length, '0') : '';
       const lead = bits ? PLACES.length - bits.length : 0;
-      return `<div class="place" role="group" aria-label="位值表">${PLACES.map((v, i) => {
+      return `<div class="place" style="--cols:${PLACES.length}" role="group" aria-label="位值表">${PLACES.map((v, i) => {
         const cls = ['place-cell'];
         if (padded && padded[i] === '1') cls.push('on');
         if (padded && i < lead) cls.push('lead');
@@ -356,15 +553,16 @@
     }
 
     function makeOptions(n) {
-      const pool = shuffle([n + 1, n - 1, n + 2, n - 2, n + 8, n - 8, n ^ 1, n ^ 2, n ^ 4, n ^ 8]
-        .filter((v) => v > 0 && v < 512 && v !== n));
+      const max = LEVELS[level].max;
+      const pool = shuffle([n + 1, n - 1, n + 2, n - 2, n + 4, n - 4, n ^ 1, n ^ 2, n ^ 4, n ^ 8]
+        .filter((v) => v > 0 && v <= max && v !== n));
       const picked = new Set();
       for (const v of pool) {
         if (picked.size >= 3) break;
         picked.add(v);
       }
       while (picked.size < 3) {
-        const v = 1 + Math.floor(Math.random() * 499);
+        const v = 1 + Math.floor(Math.random() * max);
         if (v !== n) picked.add(v);
       }
       return shuffle([n, ...picked]);
@@ -373,8 +571,12 @@
     function showMenu() {
       state = null;
       stage.innerHTML = `
-        <h2 class="stage-title">選擇玩法</h2>
-        <p class="muted">每一輪 ${TOTAL} 題，數字都在 500 以內。</p>
+        <h2 class="stage-title">選擇難度與玩法</h2>
+        <p class="muted">每一輪 ${TOTAL} 題。第一次玩建議從「入門」開始，數字很小，還會幫你打開位值提示。</p>
+        <div class="seg" role="group" aria-label="難度">
+          ${Object.entries(LEVELS).map(([key, l]) => `
+            <button type="button" data-level="${key}" aria-pressed="${key === level}">${l.label}<small>${l.desc}</small></button>`).join('')}
+        </div>
         <div class="choice-grid">
           ${Object.entries(MODES).map(([key, m]) => `
             <button type="button" class="choice" data-mode="${key}">
@@ -382,18 +584,24 @@
             </button>`).join('')}
         </div>`;
       $$('.choice', stage).forEach((b) => b.addEventListener('click', () => begin(b.dataset.mode)));
+      $$('.seg button', stage).forEach((b) => b.addEventListener('click', () => {
+        level = b.dataset.level;
+        $$('.seg button', stage).forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      }));
     }
 
     function begin(mode) {
+      const max = LEVELS[level].max;
+      PLACES = ALL_PLACES.slice(-LEVELS[level].bits);
       const used = new Set();
       const qs = [];
       while (qs.length < TOTAL) {
-        const n = 1 + Math.floor(Math.random() * 499); // 1 ~ 499
+        const n = 1 + Math.floor(Math.random() * max); // 1 ~ max
         if (used.has(n)) continue;
         used.add(n);
         qs.push({ n, bin: n.toString(2), options: mode === 'b2d' ? makeOptions(n) : null });
       }
-      state = { mode, qs, i: 0, score: 0, answers: [], answered: false, hint: false };
+      state = { mode, level, qs, i: 0, score: 0, answers: [], answered: false, hint: level === 'easy' };
       showQuestion();
     }
 
@@ -416,7 +624,7 @@
           <div class="answer-row">
             <label class="sr-only" for="bin">你的二進位答案</label>
             <input id="bin" class="bin-input" type="text" inputmode="numeric" autocomplete="off"
-                   spellcheck="false" maxlength="9" placeholder="只能輸入 0 和 1">
+                   spellcheck="false" maxlength="${LEVELS[state.level].bits}" placeholder="只能輸入 0 和 1">
             <button type="button" class="btn btn-primary" id="check">確認答案</button>
           </div>` : `
           <div class="options">
@@ -537,7 +745,7 @@
       const ok = store.add({
         activityId: 'binary',
         mode: state.mode,
-        modeLabel: MODES[state.mode].label,
+        modeLabel: `${MODES[state.mode].label}・${LEVELS[state.level].label}`,
         score: state.score,
         total: TOTAL,
         ts: Date.now()
@@ -574,6 +782,12 @@
 
       const mode = state.mode;
       $('#again').addEventListener('click', () => begin(mode));
+      const lv = state.level;
+      if (state.score === TOTAL && lv !== 'hard') {
+        const nextLv = lv === 'easy' ? 'mid' : 'hard';
+        $('#menu').insertAdjacentHTML('beforebegin', `<button type="button" class="btn" id="levelup">挑戰「${LEVELS[nextLv].label}」</button>`);
+        $('#levelup').addEventListener('click', () => { level = nextLv; begin(mode); });
+      }
       $('#menu').addEventListener('click', showMenu);
     }
 
@@ -1626,6 +1840,9 @@
       title = renderArea(parts[1]);
     } else if (parts[0] === 'activity' && findActivity(parts[1])) {
       title = renderActivity(parts[1]);
+    } else if (parts[0] === 'glossary') {
+      title = renderGlossary();
+      nav = 'glossary';
     } else if (parts[0] === 'profile') {
       title = renderProfile();
       nav = 'profile';
