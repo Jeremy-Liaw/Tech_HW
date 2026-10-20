@@ -211,15 +211,37 @@
   /* =====================================================
    * 3. 本機紀錄（localStorage，每台裝置各自保存）
    * ===================================================== */
+  const blankData = () => ({ v: 2, records: [], xp: 0, badges: {}, days: [] });
+
   const store = {
     load() {
       try {
         const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) return { records: [] };
+        if (!raw) return blankData();
         const data = JSON.parse(raw);
-        return data && Array.isArray(data.records) ? data : { records: [] };
+        if (!data || !Array.isArray(data.records)) return blankData();
+        if (data.v !== 2) {
+          // 舊版紀錄：依過去的成績補算經驗值、天數與徽章（不會跳出慶祝）
+          const seen = new Set();
+          data.xp = 0;
+          data.days = [];
+          data.records.forEach((r) => {
+            data.xp += calcXp(r, !seen.has(r.activityId));
+            seen.add(r.activityId);
+            const k = dayKey(r.ts);
+            if (!data.days.includes(k)) data.days.push(k);
+          });
+          data.badges = {};
+          const stamp = data.records.length ? data.records[data.records.length - 1].ts : Date.now();
+          BADGES.forEach((b) => { if (b.test(data)) data.badges[b.id] = stamp; });
+          data.v = 2;
+        }
+        data.xp = Number(data.xp) || 0;
+        if (!data.badges || typeof data.badges !== 'object') data.badges = {};
+        if (!Array.isArray(data.days)) data.days = [];
+        return data;
       } catch (e) {
-        return { records: [] };
+        return blankData();
       }
     },
     save(data) {
@@ -232,14 +254,184 @@
     },
     add(record) {
       const data = this.load();
+      const first = !data.records.some((r) => r.activityId === record.activityId);
       data.records.push(record);
       if (data.records.length > 500) data.records.splice(0, data.records.length - 500);
-      return this.save(data);
+
+      const levelBefore = levelOf(data.xp);
+      const gain = calcXp(record, first);
+      data.xp += gain;
+
+      const key = dayKey(record.ts);
+      if (!data.days.includes(key)) data.days.push(key);
+      data.days = data.days.slice(-120);
+
+      const fresh = BADGES.filter((b) => !data.badges[b.id] && b.test(data));
+      fresh.forEach((b) => { data.badges[b.id] = record.ts; });
+
+      const ok = this.save(data);
+      if (ok) {
+        const levelAfter = levelOf(data.xp);
+        showReward({
+          gain,
+          perfect: isPerfect(record),
+          levelUp: levelAfter > levelBefore ? levelAfter : 0,
+          badges: fresh,
+          streak: streakOf(data.days)
+        });
+      }
+      return ok;
     },
     clear() {
-      return this.save({ records: [] });
+      return this.save(blankData());
     }
   };
+
+  /* =====================================================
+   * 3b. 遊戲化：經驗值、等級、連續天數、徽章、彩帶
+   * ===================================================== */
+  const LEVEL_TITLES = ['新手上路', '好奇寶寶', '小小工程師', '網路探險家', '資安小衛士', '位元魔法師', '系統大師', '資訊傳奇'];
+  const MAX_LEVEL = LEVEL_TITLES.length;
+  const xpAt = (lv) => 40 * (lv - 1) * (lv - 1); // 升到某一級需要的總經驗值
+
+  function levelOf(xp) {
+    return Math.min(MAX_LEVEL, Math.floor(Math.sqrt(Math.max(0, xp) / 40)) + 1);
+  }
+
+  function levelInfo(xp) {
+    const lv = levelOf(xp);
+    const floor = xpAt(lv);
+    const next = lv < MAX_LEVEL ? xpAt(lv + 1) : null;
+    return {
+      lv,
+      title: LEVEL_TITLES[lv - 1],
+      next,
+      left: next ? next - xp : 0,
+      pct: next ? Math.round(((xp - floor) / (next - floor)) * 100) : 100
+    };
+  }
+
+  function dayKey(ts) {
+    const d = new Date(ts);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+
+  // 連續學習天數：今天或昨天有玩，就從那天往前數
+  function streakOf(days) {
+    const set = new Set(days);
+    const d = new Date();
+    d.setHours(12, 0, 0, 0);
+    if (!set.has(dayKey(d))) {
+      d.setDate(d.getDate() - 1);
+      if (!set.has(dayKey(d))) return 0;
+    }
+    let n = 0;
+    while (set.has(dayKey(d))) {
+      n++;
+      d.setDate(d.getDate() - 1);
+    }
+    return n;
+  }
+
+  const isPerfect = (r) => !r.noScore && r.total > 0 && r.score === r.total;
+
+  // 每次完成活動得到的經驗值：基本分 + 滿分加成 + 第一次玩加成 + 每日挑戰加成
+  function calcXp(r, first) {
+    let xp = r.noScore ? 12 : 8 + Math.round(12 * (r.score / r.total));
+    if (isPerfect(r)) xp += 10;
+    if (first) xp += 15;
+    if (r.activityId === 'daily') xp += 10;
+    return xp;
+  }
+
+  const BADGES = [
+    { id: 'first', icon: '🌱', name: '第一步', desc: '完成第一個活動', test: (d) => d.records.length >= 1 },
+    { id: 'perfect', icon: '⭐', name: '滿分達人', desc: '任何活動拿到滿分', test: (d) => d.records.some(isPerfect) },
+    { id: 'perfect5', icon: '🌟', name: '滿分收藏家', desc: '累積 5 次滿分', test: (d) => d.records.filter(isPerfect).length >= 5 },
+    { id: 'explorer', icon: '🧭', name: '三領域探險家', desc: '硬體、網路、資安都玩過',
+      test: (d) => AREAS.every((a) => d.records.some((r) => (findActivity(r.activityId) || {}).area === a.id)) },
+    { id: 'all', icon: '🏆', name: '全勤學員', desc: '7 個活動全部玩過',
+      test: (d) => ACTIVITIES.every((a) => d.records.some((r) => r.activityId === a.id)) },
+    { id: 'bin', icon: '🔢', name: '二進位高手', desc: '二進位「挑戰」級拿到滿分',
+      test: (d) => d.records.some((r) => r.activityId === 'binary' && isPerfect(r) && String(r.modeLabel).includes('挑戰')) },
+    { id: 'phish', icon: '🎣', name: '釣魚剋星', desc: '釣魚郵件和詐騙簡訊都拿滿分',
+      test: (d) => ['phish-mail', 'phish-sms'].every((id) => d.records.some((r) => r.activityId === id && isPerfect(r))) },
+    { id: 'daily', icon: '📅', name: '每日挑戰者', desc: '完成一次每日挑戰', test: (d) => d.records.some((r) => r.activityId === 'daily') },
+    { id: 'streak3', icon: '🔥', name: '三天不間斷', desc: '連續 3 天學習', test: (d) => streakOf(d.days) >= 3 },
+    { id: 'streak7', icon: '🚀', name: '一週堅持', desc: '連續 7 天學習', test: (d) => streakOf(d.days) >= 7 },
+    { id: 'plays10', icon: '💪', name: '勤奮學習', desc: '累積完成 10 次活動', test: (d) => d.records.length >= 10 },
+    { id: 'lv5', icon: '👑', name: '資訊達人', desc: '升到 5 級', test: (d) => levelOf(d.xp) >= 5 }
+  ];
+
+  const dailyDone = () => store.load().records.some((r) => r.activityId === 'daily' && dayKey(r.ts) === dayKey(Date.now()));
+
+  // 彩帶（使用者設定「減少動態效果」時不播放）
+  function confetti() {
+    if (reducedMotion()) return;
+    const cv = document.createElement('canvas');
+    cv.className = 'confetti';
+    cv.setAttribute('aria-hidden', 'true');
+    cv.width = window.innerWidth;
+    cv.height = window.innerHeight;
+    document.body.appendChild(cv);
+    const ctx = cv.getContext('2d');
+    const colors = ['#2457D6', '#7440D0', '#E0701A', '#17A06B', '#F2B134'];
+    const ps = Array.from({ length: 90 }, (_, i) => ({
+      x: cv.width / 2 + (Math.random() - 0.5) * cv.width * 0.4,
+      y: cv.height * 0.35,
+      vx: (Math.random() - 0.5) * 12,
+      vy: -Math.random() * 12 - 4,
+      s: 6 + Math.random() * 6,
+      r: Math.random() * 6,
+      vr: (Math.random() - 0.5) * 0.4,
+      c: colors[i % colors.length]
+    }));
+    const t0 = performance.now();
+    (function frame(t) {
+      const el = t - t0;
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      ps.forEach((p) => {
+        p.vy += 0.38; p.x += p.vx; p.y += p.vy; p.vx *= 0.99; p.r += p.vr;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.r);
+        ctx.globalAlpha = Math.max(0, 1 - el / 2600);
+        ctx.fillStyle = p.c;
+        ctx.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2);
+        ctx.restore();
+      });
+      if (el < 2600) requestAnimationFrame(frame);
+      else cv.remove();
+    })(t0);
+  }
+
+  // 完成活動後的獎勵彈窗
+  let rewardTimer = null;
+  function showReward({ gain, perfect, levelUp, badges, streak }) {
+    let box = $('#reward');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'reward';
+      box.className = 'reward';
+      box.dataset.theme = 'daily';
+      box.setAttribute('role', 'status');
+      box.setAttribute('aria-live', 'polite');
+      box.addEventListener('click', () => box.classList.remove('show'));
+      document.body.appendChild(box);
+    }
+    const lines = [];
+    if (perfect) lines.push('⭐ 滿分！');
+    if (levelUp) lines.push(`🎉 升級了！現在是 ${levelUp} 級「${LEVEL_TITLES[levelUp - 1]}」`);
+    badges.forEach((b) => lines.push(`${b.icon} 解鎖徽章「${esc(b.name)}」`));
+    if (streak >= 2 && !levelUp && !badges.length) lines.push(`🔥 連續 ${streak} 天學習`);
+    box.innerHTML = `<div class="rw-xp">+${gain} 經驗值</div>${lines.map((l) => `<div class="rw-line">${l}</div>`).join('')}`;
+    box.classList.add('show');
+    clearTimeout(rewardTimer);
+    rewardTimer = setTimeout(() => box.classList.remove('show'), lines.length > 1 ? 6000 : 4200);
+    if (perfect || levelUp || badges.length) confetti();
+    updateNav();
+  }
 
   function playedIds() {
     return new Set(store.load().records.map((r) => r.activityId));
@@ -267,6 +459,85 @@
     else delete main.dataset.theme;
   }
 
+  /* ---------- 吉祥物「位元」、冷知識 ---------- */
+  const MASCOT = `
+    <svg viewBox="0 0 80 80" aria-hidden="true">
+      <line x1="40" y1="16" x2="40" y2="8" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="40" cy="6" r="4.5" fill="var(--flame)"/>
+      <g fill="var(--accent)">
+        <rect x="7" y="27" width="12" height="5" rx="2.5"/><rect x="7" y="39" width="12" height="5" rx="2.5"/><rect x="7" y="51" width="12" height="5" rx="2.5"/>
+        <rect x="61" y="27" width="12" height="5" rx="2.5"/><rect x="61" y="39" width="12" height="5" rx="2.5"/><rect x="61" y="51" width="12" height="5" rx="2.5"/>
+        <rect x="16" y="16" width="48" height="54" rx="15"/>
+      </g>
+      <rect x="23" y="24" width="34" height="28" rx="10" fill="#fff"/>
+      <g class="m-eyes" fill="#141C2B"><circle cx="33" cy="38" r="4"/><circle cx="47" cy="38" r="4"/></g>
+      <path d="M33 60 q7 7 14 0" stroke="#fff" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+    </svg>`;
+
+  const FACTS = [
+    '世界上第一個網站在 1991 年上線，內容只是在介紹網站本身是什麼。',
+    '1 個位元組（byte）有 8 個位元（bit），可以表示 256 種不同的值，從 0 到 255。',
+    '英文字母 A 在電腦裡其實是數字 65，寫成二進位就是 01000001。',
+    '1947 年，工程師在電腦裡抓到一隻真的飛蛾，貼進紀錄本還寫上「第一個真的被抓到的 bug」。',
+    '第一封電子郵件在 1971 年寄出，而 @ 符號就是從那時開始用在信箱位址裡。',
+    'IPv4 位址大約只有 43 億個，因為不夠用，才發明了位址多到數不完的 IPv6。',
+    '跨海的網路，絕大部分是靠鋪在海底的光纜在傳遞，不是靠衛星。',
+    '第一個電腦滑鼠是用木頭做的，在 1960 年代由工程師 Douglas Engelbart 發明。',
+    'https 最後的 s 是 secure（安全）的意思，代表資料在傳輸時有加密。',
+    '現在的 CPU 時脈常見是 3 GHz，也就是每秒可以處理大約 30 億個運算週期。',
+    '「123456」這種簡單密碼，年年都名列最常被破解的密碼榜。',
+    '台灣的反詐騙諮詢專線是 165，收到可疑訊息不確定時，可以打去問。'
+  ];
+  let factIdx = Math.floor(Math.random() * FACTS.length);
+
+  /* ---------- 玩家卡（首頁、個人檔案共用） ---------- */
+  function playerCard(withFact) {
+    const d = store.load();
+    const info = levelInfo(d.xp);
+    const streak = streakOf(d.days);
+    const isNew = !d.records.length;
+    const xpLine = info.next
+      ? `${d.xp} / ${info.next} 經驗值，再 ${info.left} 就升級`
+      : `${d.xp} 經驗值，已達最高等級`;
+    const say = isNew
+      ? '嗨，我是「位元」！從任何一個活動開始吧，每玩一次都會拿到經驗值，還能解鎖徽章。'
+      : `你知道嗎？<span id="fact-text">${FACTS[factIdx]}</span>`;
+    return `
+      <section class="player">
+        <div class="mascot">${MASCOT}</div>
+        <div class="player-main">
+          <div class="player-top">
+            <div><span class="lv-badge">${info.lv} 級</span><strong>${info.title}</strong></div>
+            <span class="streak">${streak >= 2 ? `🔥 連續 ${streak} 天` : streak === 1 ? '🔥 今天已學習' : '今天來學一點吧'}</span>
+          </div>
+          <div class="bar xp-bar" role="progressbar" aria-label="升級進度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${info.pct}"><i style="width:${info.pct}%"></i></div>
+          <div class="muted xp-text">${xpLine}</div>
+          ${withFact ? `<div class="fact"><p>${say}</p>${isNew ? '' : '<button type="button" class="btn btn-ghost" id="fact-next">再來一個</button>'}</div>` : ''}
+        </div>
+      </section>`;
+  }
+
+  function badgesPanel() {
+    const d = store.load();
+    const got = BADGES.filter((b) => d.badges[b.id]).length;
+    return `
+      <section class="panel">
+        <h2>我的徽章（${got} / ${BADGES.length}）</h2>
+        <p class="muted">完成對應的挑戰就會解鎖，灰色的是還沒拿到的。</p>
+        <div class="badge-grid" data-theme="daily">
+          ${BADGES.map((b) => {
+            const at = d.badges[b.id];
+            return `<div class="badge ${at ? 'on' : 'off'}">
+              <span class="badge-ic">${at ? b.icon : '🔒'}</span>
+              <strong>${b.name}</strong>
+              <small>${b.desc}</small>
+              ${at ? `<small class="when">${new Date(at).toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' })} 解鎖</small>` : ''}
+            </div>`;
+          }).join('')}
+        </div>
+      </section>`;
+  }
+
   function renderHome() {
     setTheme('');
     const played = playedIds();
@@ -287,12 +558,23 @@
           <p>挑一個領域再玩一次，把成績刷高。</p>
         </div>
       </div>`;
+    const done = dailyDone();
+    const dailyCard = `
+      <a class="next-card" data-theme="daily" href="#/daily">
+        <div>
+          <div class="kicker-t">📅 每日挑戰</div>
+          <h2>${done ? '今天已完成，明天見！' : '今天的 5 題快問快答'}</h2>
+          <p>${done ? '想再練習的話，可以玩練習模式。' : '每天題目都不同，答對連續題還有連對加油。'}</p>
+        </div>
+        <span class="pill pill-go">${done ? '練習' : '開始'}</span>
+      </a>`;
     main.innerHTML = `
       <section class="intro">
         <h1>用玩的，搞懂電腦與網路</h1>
-        <p>不需要任何基礎。每個活動都有一段「先看重點」，讀完再玩，幾分鐘就能看懂平常用的東西是怎麼運作的。</p>
+        <p>不需要任何基礎。玩活動、拿經驗值、升級、解鎖徽章，幾分鐘就能看懂平常用的東西是怎麼運作的。</p>
       </section>
-      ${nextCard}
+      ${playerCard(true)}
+      <div class="promo-row">${dailyCard}${nextCard}</div>
       <div class="area-grid">
         ${AREAS.map((area) => {
           const acts = ACTIVITIES.filter((a) => a.area === area.id);
@@ -308,6 +590,13 @@
             </a>`;
         }).join('')}
       </div>`;
+    const factBtn = $('#fact-next');
+    if (factBtn) {
+      factBtn.addEventListener('click', () => {
+        factIdx = (factIdx + 1) % FACTS.length;
+        $('#fact-text').textContent = FACTS[factIdx];
+      });
+    }
     return APP_NAME;
   }
 
@@ -382,6 +671,199 @@
     return act.title;
   }
 
+  /* ---------- 每日挑戰 ---------- */
+  // 每題第一個選項是正確答案，出題時會自動打亂
+  const QBANK = [
+    { a: 'hardware', q: '哪個零件被稱為電腦的「大腦」？', o: ['CPU', '記憶體', '電源供應器', '散熱風扇'], why: 'CPU 負責計算和下指令，就像大腦。' },
+    { a: 'hardware', q: '電腦關機之後，哪一種裡面的資料會消失？', o: ['記憶體（RAM）', 'SSD', '硬碟', '隨身碟'], why: '記憶體是暫時的工作桌，關機就清空；SSD、硬碟、隨身碟會長期保存。' },
+    { a: 'hardware', q: '二進位 1010 等於十進位多少？', o: ['10', '8', '12', '5'], why: '8 + 2 = 10。1 的位置是 8 和 2，0 的位置不算。' },
+    { a: 'hardware', q: '二進位 111 等於十進位多少？', o: ['7', '3', '5', '8'], why: '4 + 2 + 1 = 7。' },
+    { a: 'hardware', q: '十進位 9 的二進位是哪一個？', o: ['1001', '1010', '1100', '0111'], why: '9 = 8 + 1，所以 8 和 1 的位置寫 1，其他寫 0，就是 1001。' },
+    { a: 'hardware', q: '1 個位元組（byte）等於幾個位元（bit）？', o: ['8 個', '2 個', '4 個', '16 個'], why: '1 byte = 8 bits，可以表示 0 到 255 共 256 種值。' },
+    { a: 'hardware', q: '負責把插座的電分給各個零件的是？', o: ['電源供應器', '主機板', 'CPU', '硬碟'], why: '電源供應器把插座的交流電轉成電腦零件能用的電。' },
+    { a: 'hardware', q: '同時開很多程式變得很卡，增加哪個最直接有幫助？', o: ['記憶體', '鍵盤', '螢幕', '滑鼠'], why: '記憶體不夠，電腦就沒有足夠的「工作桌」放正在用的東西。' },
+    { a: 'hardware', q: '所有零件都要插在哪個電路板上互相連接？', o: ['主機板', '顯示卡', '電源供應器', '散熱器'], why: '主機板就像道路，把所有零件連在一起。' },
+    { a: 'hardware', q: '電腦裡的資料為什麼都用 0 和 1 來記？', o: ['電路只有「有電」和「沒電」兩種狀態', '因為 0 和 1 比較好看', '因為電腦不會算其他數字', '因為網路只能傳 0 和 1'], why: '有電代表 1、沒電代表 0，這樣最簡單、最不容易出錯。' },
+
+    { a: 'network', q: 'DNS 的工作是什麼？', o: ['把網址翻譯成 IP 位址', '把網頁加密', '防止電腦中毒', '加快網路速度'], why: 'DNS 像網路電話簿，把好記的網址查成電腦要的 IP。' },
+    { a: 'network', q: '下面哪一個長得像 IP 位址？', o: ['192.168.1.1', 'www.example.com', '12:30:45', 'abc@mail.com'], why: 'IPv4 位址是四組數字，中間用點隔開。' },
+    { a: 'network', q: '網址開頭的 https 比 http 多了什麼？', o: ['傳輸時會加密', '速度更快', '不會有廣告', '一定是官方網站'], why: 'HTTPS 的 s 是 secure，資料會加密，別人攔到也看不懂。' },
+    { a: 'network', q: '網頁出現「404」代表什麼？', o: ['找不到這個頁面', '連線成功', '伺服器壞掉了', '需要付費'], why: '404 是「Not Found」，網址可能打錯或頁面被刪掉。' },
+    { a: 'network', q: 'TCP 三次握手的第一句話是什麼？', o: ['SYN', 'ACK', 'SYN + ACK', 'FIN'], why: '第一句 SYN 是「我想連線」，伺服器再回 SYN + ACK，最後你回 ACK。' },
+    { a: 'network', q: '為什麼第二次打開同一個網站通常比較快？', o: ['有快取，不用重新查和重新下載', '網站自己變快了', '因為網路變粗了', '因為電腦重新開機了'], why: '快取會把查過、下載過的東西暫存起來，下次直接用。' },
+    { a: 'network', q: '網路上傳送的資料會被切成許多小塊，叫做什麼？', o: ['封包', '磁區', '像素', '指令'], why: '資料切成封包分別傳送，到了目的地再拼回來。' },
+    { a: 'network', q: '瀏覽器向網站伺服器要網頁，這個動作叫做？', o: ['請求（Request）', '回應（Response）', '快取（Cache）', '加密（Encrypt）'], why: '瀏覽器發出請求，伺服器再回傳回應。' },
+    { a: 'network', q: '網頁的狀態碼 200 代表什麼？', o: ['成功', '找不到', '伺服器出錯', '被擋下來'], why: '200 是 OK，請求順利完成。' },
+    { a: 'network', q: 'www.example.com 最後面的「.com」叫做什麼？', o: ['頂級網域（TLD）', '通訊協定', 'IP 位址', '檔案格式'], why: '.com、.org、.tw 這類網址結尾，都是頂級網域。' },
+
+    { a: 'security', q: '收到訊息說「帳戶 24 小時內停用，請立刻點連結登入」，最可能是什麼？', o: ['釣魚詐騙', '正常的通知', '朋友的玩笑', '系統更新'], why: '製造恐慌、催你馬上行動，是詐騙最常見的手法。' },
+    { a: 'security', q: '有人要你報出手機收到的簡訊驗證碼，你應該？', o: ['絕對不要給任何人', '確認對方是客服再給', '只給朋友', '給一半就好'], why: '驗證碼等於一把一次性的鑰匙，誰要都不能給。' },
+    { a: 'security', q: '台灣的反詐騙諮詢專線是幾號？', o: ['165', '110', '119', '104'], why: '165 反詐騙專線，不確定時可以打去問。' },
+    { a: 'security', q: '怎麼知道信裡的按鈕真正會連到哪裡？', o: ['看實際的網址，不是只看按鈕上的字', '看按鈕的顏色', '看信寫得有沒有禮貌', '直接點點看'], why: '按鈕寫的字可以隨便編，真正的連結要看實際網址。' },
+    { a: 'security', q: '網址旁邊有小鎖頭，代表這個網站一定可信嗎？', o: ['不一定，只代表連線有加密', '一定可信', '一定是官方網站', '一定沒有廣告'], why: '詐騙網站也可以有 HTTPS，所以還是要看網址是不是正確。' },
+    { a: 'security', q: '朋友突然傳訊說換了新號碼，要你先幫忙匯錢，你應該先做什麼？', o: ['用原本的電話號碼打給他確認', '馬上匯，朋友有急用', '請他先傳身分證照片', '問他今天吃什麼'], why: '假冒親友是常見詐騙，先用原本的聯絡方式確認。' },
+    { a: 'security', q: '信箱顯示「某某銀行客服」，但寄件網域是 x8f2k.top，最可能是什麼？', o: ['冒充的釣魚信', '銀行的新信箱', '系統自動轉寄', '正常通知'], why: '正式機構通常使用固定的官方網域，亂碼加怪結尾很可疑。' },
+    { a: 'security', q: '簡訊說「包裹地址有誤，補繳 NT$25」並附陌生短網址，應該怎麼做？', o: ['不點、不回，向官方確認', '趕快點進去繳', '回覆說你不是收件人', '轉傳給朋友'], why: '小金額加限時，目的是讓你沒時間想。' },
+    { a: 'security', q: '不同網站的密碼，最好怎麼設定？', o: ['每個網站不一樣，而且夠長', '全部都用同一組', '用生日就好', '用 123456 最好記'], why: '同一組密碼被偷一個，所有帳號都危險。' },
+    { a: 'security', q: '把自己的銀行帳戶借給陌生人「幫忙收款」，會發生什麼事？', o: ['可能變成詐騙的人頭帳戶，自己也違法', '可以賺錢，沒有風險', '銀行會給獎勵', '對方會負全責'], why: '人頭帳戶是詐騙集團常用的工具，提供帳戶的人也會被追究。' },
+    { a: 'security', q: '兩步驟驗證的好處是什麼？', o: ['密碼被偷了，還需要第二道驗證才能登入', '不用再設密碼', '可以更快登入', '網路會變快'], why: '多一道關卡，壞人光知道密碼還是進不來。' }
+  ];
+
+  function hashStr(s) {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  function mulberry32(a) {
+    return function () {
+      let t = (a += 0x6D2B79F5);
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function seededShuffle(arr, rnd) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  function renderDaily() {
+    setTheme('daily');
+    main.innerHTML = `
+      <a class="back" href="#/">${ICONS.back}回到首頁</a>
+      <header class="page-head">
+        <span class="kicker">📅 每日挑戰</span>
+        <h1>今天的 5 題快問快答</h1>
+        <p>每天的題目都不一樣，涵蓋硬體、網路、資安。答對越多，拿到的經驗值越多；連續答對還會有連對加油。</p>
+      </header>
+      <section class="stage" id="stage"></section>`;
+    startDaily($('#stage'));
+    return '每日挑戰';
+  }
+
+  function startDaily(stage) {
+    const TOTAL = 5;
+    const key = dayKey(Date.now());
+    const todayRec = store.load().records.filter((r) => r.activityId === 'daily' && dayKey(r.ts) === key).pop();
+    let practice = false;
+    let st = null;
+
+    function pickQuestions() {
+      const list = practice ? shuffle(QBANK) : seededShuffle(QBANK, mulberry32(hashStr(key)));
+      return list.slice(0, TOTAL).map((q) => ({
+        ...q,
+        opts: shuffle(q.o.map((t, i) => ({ t, ok: i === 0 })))
+      }));
+    }
+
+    function begin(isPractice) {
+      practice = isPractice;
+      st = { qs: pickQuestions(), i: 0, score: 0, combo: 0, best: 0, answers: [] };
+      show();
+    }
+
+    function intro() {
+      stage.innerHTML = `
+        <h2 class="stage-title">今天已經完成了</h2>
+        <p class="muted">今天的成績是 ${todayRec.score} / ${TOTAL}，明天會有新的 5 題。想再玩的話，可以來一輪練習模式：題目不同，不計入經驗值。</p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary" id="dq-practice">練習一輪</button>
+          <a class="btn" href="#/">回首頁</a>
+        </div>`;
+      $('#dq-practice').addEventListener('click', () => begin(true));
+    }
+
+    function show() {
+      const q = st.qs[st.i];
+      const area = findArea(q.a);
+      stage.innerHTML = `
+        <div class="game-top">
+          <strong>第 ${st.i + 1} / ${TOTAL} 題${practice ? '（練習）' : ''}</strong>
+          <span class="combo">${st.combo >= 2 ? `🔥 連對 ${st.combo} 題` : ''}</span>
+        </div>
+        <div class="bar" aria-hidden="true"><i style="width:${(st.i / TOTAL) * 100}%"></i></div>
+        <div data-theme="${q.a}">
+          <span class="kicker dq-area">${ICONS[area.icon]}${area.title}</span>
+          <h2 class="question">${esc(q.q)}</h2>
+          <div class="opt-list">
+            ${q.opts.map((o, k) => `<button type="button" class="opt" data-k="${k}">${esc(o.t)}</button>`).join('')}
+          </div>
+          <div id="dq-fb"></div>
+        </div>`;
+      $$('.opt', stage).forEach((b) => b.addEventListener('click', () => answer(Number(b.dataset.k))));
+    }
+
+    function answer(k) {
+      const q = st.qs[st.i];
+      const ok = q.opts[k].ok;
+      if (ok) {
+        st.score++;
+        st.combo++;
+        st.best = Math.max(st.best, st.combo);
+      } else {
+        st.combo = 0;
+      }
+      st.answers.push({ q, ok });
+      $$('.opt', stage).forEach((b, i) => {
+        b.disabled = true;
+        if (q.opts[i].ok) b.classList.add('is-correct');
+        else if (i === k) b.classList.add('is-wrong');
+      });
+      const last = st.i === TOTAL - 1;
+      $('#dq-fb').innerHTML = `
+        <div class="feedback ${ok ? 'good' : 'bad'}">
+          <strong>${ok ? (st.combo >= 3 ? `答對了，連對 ${st.combo} 題！` : '答對了！') : '差一點，看看解釋'}</strong>
+          ${esc(q.why)}
+          <div><button type="button" class="btn btn-primary" id="dq-next">${last ? '看結果' : '下一題'}</button></div>
+        </div>`;
+      const next = $('#dq-next');
+      next.focus();
+      next.addEventListener('click', () => {
+        if (last) finish();
+        else { st.i++; show(); }
+      });
+    }
+
+    function finish() {
+      let saved = true;
+      if (!practice) {
+        saved = store.add({ activityId: 'daily', mode: 'daily', modeLabel: '每日挑戰', score: st.score, total: TOTAL, ts: Date.now() });
+      }
+      const msg = st.score === TOTAL ? '全對！你今天的資訊腦袋滿格。'
+        : st.score >= 3 ? '不錯喔，看看答錯的解釋，明天再拿滿分。'
+        : '沒關係，每天練一點就會進步。看看下面的解釋吧。';
+      stage.innerHTML = `
+        <h2 class="stage-title">${practice ? '練習結束' : '今天的挑戰完成了'}</h2>
+        <div class="score"><span class="score-n">${st.score}</span><span class="score-t">/ ${TOTAL}</span></div>
+        <p class="muted">${msg}${st.best >= 2 ? `　最高連對 ${st.best} 題。` : ''}</p>
+        ${practice ? '<p class="note">練習模式不計入經驗值。</p>' : (saved ? '' : '<p class="note">這個瀏覽器無法儲存紀錄。</p>')}
+        <ol class="review">
+          ${st.answers.map((a) => `
+            <li><strong class="${a.ok ? 'ok' : 'no'}">${a.ok ? '答對' : '答錯'}</strong>　${esc(a.q.q)}
+              <div class="muted">${a.ok ? '' : `正確答案：${esc(a.q.o[0])}。`}${esc(a.q.why)}</div>
+            </li>`).join('')}
+        </ol>
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary" id="dq-again">練習一輪</button>
+          <a class="btn" href="#/">回首頁</a>
+          <a class="btn" href="#/profile">看我的徽章</a>
+        </div>`;
+      $('#dq-again').addEventListener('click', () => begin(true));
+    }
+
+    if (todayRec) intro();
+    else begin(false);
+  }
+
   function renderGlossary() {
     setTheme('');
     main.innerHTML = `
@@ -420,11 +902,13 @@
     if (!records.length) {
       main.innerHTML = `
         <header class="page-head"><h1>個人檔案</h1></header>
+        ${playerCard(false)}
         <div class="empty">
           <h2>還沒有任何紀錄</h2>
-          <p>玩完一個活動後，成績會自動存在這裡。</p>
+          <p>玩完一個活動後，成績和經驗值會自動存在這裡。</p>
           <a class="btn btn-primary" href="#/">去挑一個活動</a>
         </div>
+        ${badgesPanel()}
         ${CREDIT_HTML}`;
       return '個人檔案';
     }
@@ -435,7 +919,7 @@
     const accuracy = totalQ ? `${Math.round((totalScore / totalQ) * 100)}%` : '—';
     const last = records[records.length - 1];
 
-    const summaryRows = ACTIVITIES.map((a) => {
+    const summaryRows = [...ACTIVITIES, { id: 'daily', title: '每日挑戰' }].map((a) => {
       const recs = records.filter((r) => r.activityId === a.id);
       if (!recs.length) return '';
       const best = bestOf(a.id);
@@ -454,19 +938,22 @@
       const act = findActivity(r.activityId);
       return `<tr>
         <td>${formatTime(r.ts)}</td>
-        <td>${esc(act ? act.title : r.activityId)}（${esc(r.modeLabel || '')}）</td>
+        <td>${esc(act ? act.title : (r.activityId === 'daily' ? '每日挑戰' : r.activityId))}${r.activityId === 'daily' ? '' : `（${esc(r.modeLabel || '')}）`}</td>
         <td>${scoreText(r)}</td>
       </tr>`;
     }).join('');
 
     main.innerHTML = `
       <header class="page-head"><h1>個人檔案</h1></header>
+      ${playerCard(false)}
 
       <div class="stat-grid">
         <div class="stat" data-theme="hardware"><div class="muted">遊玩次數</div><div class="stat-n">${records.length}</div></div>
         <div class="stat" data-theme="network"><div class="muted">整體正確率</div><div class="stat-n">${accuracy}</div></div>
         <div class="stat" data-theme="security"><div class="muted">最近一次</div><div class="stat-n">${formatTime(last.ts)}</div></div>
       </div>
+
+      ${badgesPanel()}
 
       <section class="panel">
         <h2>各活動成績</h2>
@@ -493,7 +980,7 @@
     $('#clear-records').addEventListener('click', async () => {
       const yes = await confirmDialog({
         title: '清除所有紀錄？',
-        body: '清除後無法復原，這台裝置上的所有成績都會被刪除。',
+        body: '清除後無法復原，這台裝置上的成績、經驗值、等級和徽章都會被刪除。',
         confirmText: '清除紀錄'
       });
       if (!yes) return;
@@ -1840,6 +2327,9 @@
       title = renderArea(parts[1]);
     } else if (parts[0] === 'activity' && findActivity(parts[1])) {
       title = renderActivity(parts[1]);
+    } else if (parts[0] === 'daily') {
+      title = renderDaily();
+      nav = 'daily';
     } else if (parts[0] === 'glossary') {
       title = renderGlossary();
       nav = 'glossary';
@@ -1855,8 +2345,17 @@
       if (a.dataset.nav === nav) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
     });
+    updateNav();
     window.scrollTo(0, 0);
     main.focus({ preventScroll: true });
+  }
+
+  // 頂部選單：個人檔案旁顯示等級，每日挑戰還沒玩時顯示小紅點
+  function updateNav() {
+    const prof = $('.topbar nav a[data-nav="profile"]');
+    if (prof) prof.innerHTML = `個人檔案<span class="lv">${levelOf(store.load().xp)} 級</span>`;
+    const daily = $('.topbar nav a[data-nav="daily"]');
+    if (daily) daily.classList.toggle('has-dot', !dailyDone());
   }
 
   window.addEventListener('hashchange', route);
